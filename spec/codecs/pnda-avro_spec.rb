@@ -1,10 +1,10 @@
 # encoding: utf-8
 require "logstash/devutils/rspec/spec_helper"
 require 'avro'
-require 'logstash/codecs/avro'
+require 'logstash/codecs/pnda-avro'
 require 'logstash/event'
 
-describe LogStash::Codecs::Avro do
+describe LogStash::Codecs::PNDAAvro do
   let (:avro_config) {{'schema_uri' => '
                         {"type": "record", "name": "Test",
                         "fields": [{"name": "foo", "type": ["null", "string"]},
@@ -12,9 +12,9 @@ describe LogStash::Codecs::Avro do
   let (:test_event) { LogStash::Event.new({"foo" => "hello", "bar" => 10}) }
 
   subject do
-    allow_any_instance_of(LogStash::Codecs::Avro).to \
+    allow_any_instance_of(LogStash::Codecs::PNDAAvro).to \
       receive(:open_and_read).and_return(avro_config['schema_uri'])
-    next LogStash::Codecs::Avro.new(avro_config)
+    next LogStash::Codecs::PNDAAvro.new(avro_config)
   end
 
   context "#decode" do
@@ -31,6 +31,21 @@ describe LogStash::Codecs::Avro do
         insist { event.get("bar") } == test_event.get("bar")
       end
     end
+
+    it "should throw exception if decoding fails" do
+      expect { subject.decode("not avro") { |_| } }.to raise_error NoMethodError
+    end
+  end
+
+  context "#decode with tag_on_failure" do
+    let (:avro_config) { super.merge("tag_on_failure" => true) }
+
+    it "should tag event on failure" do
+      subject.decode("not avro") do |event|
+        insist { event.is_a? LogStash::Event }
+        insist { event.get("tags") } == ["_avroparsefailure"]
+      end
+    end
   end
 
   context "#encode" do
@@ -38,7 +53,7 @@ describe LogStash::Codecs::Avro do
       got_event = false
       subject.on_event do |event, data|
         schema = Avro::Schema.parse(avro_config['schema_uri'])
-        datum = StringIO.new(data)
+        datum = StringIO.new(String.from_java_bytes(data))
         decoder = Avro::IO::BinaryDecoder.new(datum)
         datum_reader = Avro::IO::DatumReader.new(schema)
         record = datum_reader.read(decoder)

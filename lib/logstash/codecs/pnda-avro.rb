@@ -32,7 +32,7 @@ require "logstash/util"
 # ----------------------------------
 # input {
 #   kafka {
-#     codec => avro {
+#     codec => pnda-avro {
 #         schema_uri => "/tmp/schema.avsc"
 #     }
 #   }
@@ -44,8 +44,8 @@ require "logstash/util"
 #   ...
 # }
 # ----------------------------------
-class LogStash::Codecs::Avro < LogStash::Codecs::Base
-  config_name "avro"
+class LogStash::Codecs::PNDAAvro < LogStash::Codecs::Base
+  config_name "pnda-avro"
 
 
   # schema path to fetch the schema from.
@@ -55,6 +55,9 @@ class LogStash::Codecs::Avro < LogStash::Codecs::Base
   # * http - `http://example.com/schema.avsc`
   # * file - `/path/to/schema.avsc`
   config :schema_uri, :validate => :string, :required => true
+
+  # tag events with `_avroparsefailure` when decode fails
+  config :tag_on_failure, :validate => :boolean, :default => false
 
   def open_and_read(uri_string)
     open(uri_string).read
@@ -71,6 +74,13 @@ class LogStash::Codecs::Avro < LogStash::Codecs::Base
     decoder = Avro::IO::BinaryDecoder.new(datum)
     datum_reader = Avro::IO::DatumReader.new(@schema)
     yield LogStash::Event.new(datum_reader.read(decoder))
+  rescue => e
+    if tag_on_failure
+      @logger.error("PNDAAvro parse error, original data now in message field", :error => e)
+      yield LogStash::Event.new("message" => data, "tags" => ["_avroparsefailure"])
+    else
+      raise e
+    end
   end
 
   public
@@ -79,6 +89,6 @@ class LogStash::Codecs::Avro < LogStash::Codecs::Base
     buffer = StringIO.new
     encoder = Avro::IO::BinaryEncoder.new(buffer)
     dw.write(event.to_hash, encoder)
-    @on_event.call(event, buffer.string)
+    @on_event.call(event, buffer.string.to_java_bytes)
   end
 end
